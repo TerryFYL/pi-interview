@@ -1,0 +1,10 @@
+name = "pi-interview-api"
+main = "src/index.ts"
+compatibility_date = "2025-02-20"
+
+# API key is stored as a secret, set via:
+#   wrangler secret put ANTHROPIC_API_KEY
+# Optional env vars (set in [vars]):
+[vars]
+MODEL = "claude-sonnet-4-20250514"
+ALLOWED_ORIGIN = "*"
