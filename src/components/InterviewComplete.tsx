@@ -7,14 +7,32 @@ interface Props {
   onBack: () => void
 }
 
+function computeStats(messages: Message[]) {
+  const userMsgs = messages.filter((m) => m.role === 'user')
+  const assistantMsgs = messages.filter((m) => m.role === 'assistant')
+  const totalUserChars = userMsgs.reduce((sum, m) => sum + m.content.length, 0)
+  const totalAssistantChars = assistantMsgs.reduce((sum, m) => sum + m.content.length, 0)
+  const firstTs = messages[0]?.timestamp
+  const lastTs = messages[messages.length - 1]?.timestamp
+  const durationMin = firstTs && lastTs ? Math.round((lastTs - firstTs) / 60000) : 0
+  const avgUserLen = userMsgs.length ? Math.round(totalUserChars / userMsgs.length) : 0
+  return { userCount: userMsgs.length, assistantCount: assistantMsgs.length, totalUserChars, totalAssistantChars, durationMin, avgUserLen }
+}
+
 function buildTranscript(messages: Message[]): string {
   const today = new Date().toISOString().slice(0, 10)
+  const stats = computeStats(messages)
   const lines: string[] = [
     '# PI实验室管理访谈记录',
+    '',
     `日期: ${today}`,
-    `消息数: ${messages.length}`,
+    `时长: 约${stats.durationMin}分钟`,
+    `对话轮次: ${stats.userCount}轮`,
+    `受访者总字数: ${stats.totalUserChars}字（平均每轮${stats.avgUserLen}字）`,
     '',
     '---',
+    '',
+    '## 访谈对话',
     '',
   ]
 
@@ -28,6 +46,31 @@ function buildTranscript(messages: Message[]): string {
     lines.push(msg.content)
     lines.push('')
   }
+
+  lines.push('---')
+  lines.push('')
+  lines.push('## 痛点分析（人工填写）')
+  lines.push('')
+  lines.push('### 提到的痛点')
+  lines.push('| # | 痛点描述 | 情绪强度(1-5) | 频率 | 现有方案 | 付费意愿 |')
+  lines.push('|---|---------|-------------|------|---------|---------|')
+  lines.push('| 1 |         |             |      |         |         |')
+  lines.push('| 2 |         |             |      |         |         |')
+  lines.push('| 3 |         |             |      |         |         |')
+  lines.push('')
+  lines.push('### 关键引用')
+  lines.push('> （从对话中摘录最有价值的原话）')
+  lines.push('')
+  lines.push('### 产品机会')
+  lines.push('- 最值得解决的问题:')
+  lines.push('- 受访者的理想方案描述:')
+  lines.push('- 付费意愿信号:')
+  lines.push('')
+  lines.push('### 后续行动')
+  lines.push('- [ ] 受访者是否同意试用原型')
+  lines.push('- [ ] 是否有推荐的其他PI')
+  lines.push('- [ ] 需要补充了解的问题')
+  lines.push('')
 
   return lines.join('\n')
 }
@@ -105,7 +148,7 @@ export default function InterviewComplete({ session, onRestart, onBack }: Props)
       <div className="w-full bg-amber-50 rounded-2xl border border-amber-100 p-5 mb-6">
         <p className="text-stone-600 text-sm font-medium mb-1">导出访谈记录</p>
         <p className="text-stone-400 text-xs mb-4 leading-relaxed">
-          将完整对话导出为 Markdown 格式，方便保存或分享给调研团队。
+          导出完整对话 + 痛点分析模板（Markdown格式），方便后续整理洞察。
         </p>
         <div className="flex gap-3">
           <button
