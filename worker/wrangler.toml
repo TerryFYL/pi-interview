@@ -1,15 +1,17 @@
 name = "pi-interview-api"
 main = "src/index.ts"
 compatibility_date = "2025-02-20"
+account_id = "9afcf81ef46dbca6c5417e7514cea8d9"
 
 # Secrets (set via wrangler secret put):
-#   DEEPSEEK_API_KEY  — recommended, cheaper ($0.07/$0.27 per M tokens)
-#   ANTHROPIC_API_KEY — alternative, higher quality
+#   OPENROUTER_API_KEY — recommended, access to 200+ models
+#   DEEPSEEK_API_KEY   — direct DeepSeek access
+#   ANTHROPIC_API_KEY  — direct Anthropic access
 #
-# Auto-detection: if both keys exist, LLM_PROVIDER decides which to use.
-# If only one key exists, that provider is used automatically.
+# Auto-detection priority: OPENROUTER > ANTHROPIC > DEEPSEEK
+# Override with LLM_PROVIDER env var.
 
 [vars]
-# LLM_PROVIDER = "deepseek"  # or "anthropic" — auto-detected if not set
-# MODEL = "deepseek-chat"    # auto-set based on provider if not specified
+# LLM_PROVIDER = "openrouter"  # or "anthropic" / "deepseek" — auto-detected if not set
+# MODEL = "minimax/minimax-m2.5"  # auto-set based on provider if not specified
 ALLOWED_ORIGIN = "*"

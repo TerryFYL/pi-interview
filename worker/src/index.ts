@@ -1,7 +1,8 @@
 interface Env {
   ANTHROPIC_API_KEY?: string
   DEEPSEEK_API_KEY?: string
-  LLM_PROVIDER?: string // 'anthropic' | 'deepseek' — auto-detected if not set
+  OPENROUTER_API_KEY?: string
+  LLM_PROVIDER?: string // 'anthropic' | 'deepseek' | 'openrouter' — auto-detected if not set
   MODEL?: string
   ALLOWED_ORIGIN?: string
 }
@@ -93,24 +94,26 @@ type ChatMessage = { role: string; content: string }
 
 // --- Provider abstraction ---
 
-function detectProvider(env: Env): 'anthropic' | 'deepseek' {
-  if (env.LLM_PROVIDER === 'anthropic' || env.LLM_PROVIDER === 'deepseek') {
-    return env.LLM_PROVIDER
-  }
+function detectProvider(env: Env): 'anthropic' | 'deepseek' | 'openrouter' {
+  const p = env.LLM_PROVIDER
+  if (p === 'anthropic' || p === 'deepseek' || p === 'openrouter') return p
+  if (env.OPENROUTER_API_KEY) return 'openrouter'
   if (env.ANTHROPIC_API_KEY) return 'anthropic'
   if (env.DEEPSEEK_API_KEY) return 'deepseek'
-  return 'deepseek' // default — cheaper and great at Chinese
+  return 'deepseek'
 }
 
 function getApiKey(env: Env, provider: string): string | undefined {
   if (provider === 'anthropic') return env.ANTHROPIC_API_KEY
   if (provider === 'deepseek') return env.DEEPSEEK_API_KEY
+  if (provider === 'openrouter') return env.OPENROUTER_API_KEY
   return undefined
 }
 
 function getDefaultModel(provider: string): string {
   if (provider === 'anthropic') return 'claude-sonnet-4-20250514'
-  return 'deepseek-chat' // DeepSeek V3
+  if (provider === 'openrouter') return 'minimax/minimax-m2.5'
+  return 'deepseek-chat'
 }
 
 async function callAnthropic(
@@ -141,6 +144,29 @@ async function callDeepSeek(
   messages: ChatMessage[],
 ): Promise<Response> {
   return fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 800,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...messages.map((m) => ({ role: m.role, content: m.content })),
+      ],
+      stream: true,
+    }),
+  })
+}
+
+async function callOpenRouter(
+  apiKey: string,
+  model: string,
+  messages: ChatMessage[],
+): Promise<Response> {
+  return fetch('https://openrouter.ai/api/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -283,12 +309,15 @@ export default {
     const apiKey = getApiKey(env, provider)
 
     if (!apiKey) {
+      const keyNames: Record<string, string> = {
+        anthropic: 'ANTHROPIC_API_KEY',
+        deepseek: 'DEEPSEEK_API_KEY',
+        openrouter: 'OPENROUTER_API_KEY',
+      }
       return new Response(
         JSON.stringify({
           error: 'API key not configured',
-          hint: provider === 'anthropic'
-            ? 'Set ANTHROPIC_API_KEY as a Worker secret'
-            : 'Set DEEPSEEK_API_KEY as a Worker secret',
+          hint: `Set ${keyNames[provider] || 'API_KEY'} as a Worker secret`,
         }),
         { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } },
       )
@@ -310,6 +339,8 @@ export default {
       let llmResponse: Response
       if (provider === 'anthropic') {
         llmResponse = await callAnthropic(apiKey, model, messages)
+      } else if (provider === 'openrouter') {
+        llmResponse = await callOpenRouter(apiKey, model, messages)
       } else {
         llmResponse = await callDeepSeek(apiKey, model, messages)
       }

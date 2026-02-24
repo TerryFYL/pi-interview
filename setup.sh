@@ -6,14 +6,14 @@ set -e
 # 用法（两种方式）:
 #
 #   方式1: 环境变量
-#     CLOUDFLARE_API_TOKEN=xxx DEEPSEEK_API_KEY=sk-xxx ./setup.sh
+#     CLOUDFLARE_API_TOKEN=xxx OPENROUTER_API_KEY=sk-or-xxx ./setup.sh
 #
 #   方式2: 交互式输入
 #     ./setup.sh
 #
 # 前置条件:
 #   - 有 Cloudflare 账号（免费）: https://dash.cloudflare.com
-#   - 有 DeepSeek API Key（免费额度）: https://platform.deepseek.com
+#   - 有 OpenRouter API Key: https://openrouter.ai/keys
 #   - 已安装 Node.js 18+
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -36,16 +36,16 @@ if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
     echo ""
 fi
 
-if [ -z "$DEEPSEEK_API_KEY" ]; then
-    echo "📋 第2步: DeepSeek API Key"
-    echo "   获取方式: platform.deepseek.com → API Keys → 创建"
+if [ -z "$OPENROUTER_API_KEY" ]; then
+    echo "📋 第2步: OpenRouter API Key"
+    echo "   获取方式: openrouter.ai → Keys"
     echo ""
-    read -rp "   请粘贴 DeepSeek API Key: " DEEPSEEK_API_KEY
+    read -rp "   请粘贴 OpenRouter API Key: " OPENROUTER_API_KEY
     echo ""
 fi
 
-if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$DEEPSEEK_API_KEY" ]; then
-    echo "❌ 缺少必要凭证。需要 Cloudflare API Token 和 DeepSeek API Key。"
+if [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$OPENROUTER_API_KEY" ]; then
+    echo "❌ 缺少必要凭证。需要 Cloudflare API Token 和 OpenRouter API Key。"
     exit 1
 fi
 
@@ -70,18 +70,18 @@ if [ -z "$WORKER_URL" ]; then
     echo ""
     echo "⚠️  无法自动获取 Worker URL。部署可能成功了，请检查 Cloudflare Dashboard。"
     echo "   如果看到 Worker 已部署，请手动运行:"
-    echo "   CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN npx wrangler secret put DEEPSEEK_API_KEY"
+    echo "   CLOUDFLARE_API_TOKEN=$CLOUDFLARE_API_TOKEN npx wrangler secret put OPENROUTER_API_KEY"
     exit 1
 fi
 
 echo ""
 echo "✅ Worker 部署成功: $WORKER_URL"
 
-# --- 4. Set DeepSeek API Key as Worker secret ---
+# --- 4. Set OpenRouter API Key as Worker secret ---
 
 echo ""
-echo "🔑 配置 DeepSeek API Key..."
-echo "$DEEPSEEK_API_KEY" | npx wrangler secret put DEEPSEEK_API_KEY 2>&1
+echo "🔑 配置 OpenRouter API Key..."
+echo "$OPENROUTER_API_KEY" | npx wrangler secret put OPENROUTER_API_KEY 2>&1
 
 echo "✅ API Key 已配置"
 
