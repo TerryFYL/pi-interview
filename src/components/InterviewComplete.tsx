@@ -1,5 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import type { Message, InterviewSession } from '../lib/types'
+import { submitInterview } from '../lib/api'
 
 interface Props {
   session: InterviewSession
@@ -77,6 +78,22 @@ function buildTranscript(messages: Message[]): string {
 
 export default function InterviewComplete({ session, onRestart, onBack }: Props) {
   const [copyState, setCopyState] = useState<'idle' | 'copied'>('idle')
+  const [syncState, setSyncState] = useState<'syncing' | 'synced' | 'failed'>('syncing')
+
+  // Auto-submit interview to server on mount
+  useEffect(() => {
+    if (!session.completedAt) return
+    submitInterview({
+      id: session.id,
+      messages: session.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        timestamp: m.timestamp,
+      })),
+      startedAt: session.startedAt,
+      completedAt: session.completedAt,
+    }).then((ok) => setSyncState(ok ? 'synced' : 'failed'))
+  }, [session.id, session.completedAt])
 
   const userMessages = session.messages.filter((m) => m.role === 'user').length
   const totalRounds = session.messages.filter((m) => m.role === 'assistant').length
@@ -121,6 +138,10 @@ export default function InterviewComplete({ session, onRestart, onBack }: Props)
       <p className="text-stone-500 text-center text-base mb-8 leading-relaxed">
         感谢您的宝贵时间和真实反馈。您的每一句话都将帮助我们设计出更好的产品。
       </p>
+
+      {syncState === 'synced' && (
+        <p className="text-xs text-emerald-500 mb-4">访谈记录已自动保存</p>
+      )}
 
       <div className="w-full bg-white rounded-2xl shadow-sm border border-stone-100 p-6 mb-8">
         <div className="flex justify-around text-center">

@@ -15,3 +15,9 @@ account_id = "9afcf81ef46dbca6c5417e7514cea8d9"
 # LLM_PROVIDER = "openrouter"  # or "anthropic" / "deepseek" — auto-detected if not set
 # MODEL = "minimax/minimax-m2.5"  # auto-set based on provider if not specified
 ALLOWED_ORIGIN = "*"
+
+# KV namespace for storing interview transcripts
+# Created via: wrangler kv:namespace create INTERVIEWS
+[[kv_namespaces]]
+binding = "INTERVIEWS"
+id = "c744f98803ba40f083970a7d2313de0b"

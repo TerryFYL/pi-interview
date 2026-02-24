@@ -5,6 +5,8 @@ interface Env {
   LLM_PROVIDER?: string // 'anthropic' | 'deepseek' | 'openrouter' — auto-detected if not set
   MODEL?: string
   ALLOWED_ORIGIN?: string
+  ADMIN_KEY?: string // simple admin key for viewing interviews
+  INTERVIEWS: KVNamespace // KV storage for interview transcripts
 }
 
 const SYSTEM_PROMPT = `# 角色
@@ -272,7 +274,7 @@ function transformOpenAIStream(upstream: ReadableStream<Uint8Array>): ReadableSt
 function buildCorsHeaders(origin: string | null, allowedOrigin: string): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': allowedOrigin === '*' ? '*' : (origin || allowedOrigin),
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   }
 }
@@ -297,6 +299,63 @@ export default {
       const hasKey = !!getApiKey(env, provider)
       return new Response(
         JSON.stringify({ status: hasKey ? 'ok' : 'no_key', provider }),
+        { headers: { ...cors, 'Content-Type': 'application/json' } },
+      )
+    }
+
+    // --- Submit completed interview ---
+    if (url.pathname === '/api/submit' && request.method === 'POST') {
+      try {
+        const body = (await request.json()) as {
+          id: string
+          messages: Array<{ role: string; content: string; timestamp: number }>
+          startedAt: number
+          completedAt: number
+        }
+        if (!body.id || !Array.isArray(body.messages) || body.messages.length === 0) {
+          return new Response(
+            JSON.stringify({ error: 'id and messages are required' }),
+            { status: 400, headers: { ...cors, 'Content-Type': 'application/json' } },
+          )
+        }
+        const record = {
+          id: body.id,
+          messages: body.messages,
+          startedAt: body.startedAt,
+          completedAt: body.completedAt,
+          submittedAt: Date.now(),
+          userAgent: request.headers.get('User-Agent') || '',
+        }
+        await env.INTERVIEWS.put(`interview:${body.id}`, JSON.stringify(record))
+        return new Response(
+          JSON.stringify({ ok: true, id: body.id }),
+          { headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      } catch (e) {
+        return new Response(
+          JSON.stringify({ error: 'Failed to save interview' }),
+          { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+    }
+
+    // --- List all interviews (admin only) ---
+    if (url.pathname === '/api/interviews' && request.method === 'GET') {
+      const key = url.searchParams.get('key')
+      if (!env.ADMIN_KEY || key !== env.ADMIN_KEY) {
+        return new Response(
+          JSON.stringify({ error: 'Unauthorized' }),
+          { status: 401, headers: { ...cors, 'Content-Type': 'application/json' } },
+        )
+      }
+      const list = await env.INTERVIEWS.list({ prefix: 'interview:' })
+      const interviews = []
+      for (const item of list.keys) {
+        const data = await env.INTERVIEWS.get(item.name, 'json')
+        if (data) interviews.push(data)
+      }
+      return new Response(
+        JSON.stringify({ count: interviews.length, interviews }),
         { headers: { ...cors, 'Content-Type': 'application/json' } },
       )
     }

@@ -58,3 +58,21 @@ export async function sendMessage(
 
   return fullText
 }
+
+export async function submitInterview(session: {
+  id: string
+  messages: Array<{ role: string; content: string; timestamp: number }>
+  startedAt: number
+  completedAt: number
+}): Promise<boolean> {
+  try {
+    const response = await fetch(`${API_URL}/api/submit`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(session),
+    })
+    return response.ok
+  } catch {
+    return false
+  }
+}
