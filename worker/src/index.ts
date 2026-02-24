@@ -1,5 +1,7 @@
 interface Env {
-  ANTHROPIC_API_KEY: string
+  ANTHROPIC_API_KEY?: string
+  DEEPSEEK_API_KEY?: string
+  LLM_PROVIDER?: string // 'anthropic' | 'deepseek' — auto-detected if not set
   MODEL?: string
   ALLOWED_ORIGIN?: string
 }
@@ -87,6 +89,160 @@ const SYSTEM_PROMPT = `# 角色
 
 全程使用中文。语气温暖、专业、平等。`
 
+type ChatMessage = { role: string; content: string }
+
+// --- Provider abstraction ---
+
+function detectProvider(env: Env): 'anthropic' | 'deepseek' {
+  if (env.LLM_PROVIDER === 'anthropic' || env.LLM_PROVIDER === 'deepseek') {
+    return env.LLM_PROVIDER
+  }
+  if (env.ANTHROPIC_API_KEY) return 'anthropic'
+  if (env.DEEPSEEK_API_KEY) return 'deepseek'
+  return 'deepseek' // default — cheaper and great at Chinese
+}
+
+function getApiKey(env: Env, provider: string): string | undefined {
+  if (provider === 'anthropic') return env.ANTHROPIC_API_KEY
+  if (provider === 'deepseek') return env.DEEPSEEK_API_KEY
+  return undefined
+}
+
+function getDefaultModel(provider: string): string {
+  if (provider === 'anthropic') return 'claude-sonnet-4-20250514'
+  return 'deepseek-chat' // DeepSeek V3
+}
+
+async function callAnthropic(
+  apiKey: string,
+  model: string,
+  messages: ChatMessage[],
+): Promise<Response> {
+  return fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 800,
+      system: SYSTEM_PROMPT,
+      messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      stream: true,
+    }),
+  })
+}
+
+async function callDeepSeek(
+  apiKey: string,
+  model: string,
+  messages: ChatMessage[],
+): Promise<Response> {
+  return fetch('https://api.deepseek.com/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model,
+      max_tokens: 800,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...messages.map((m) => ({ role: m.role, content: m.content })),
+      ],
+      stream: true,
+    }),
+  })
+}
+
+// --- SSE stream transformers ---
+
+function transformAnthropicStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
+  const writer = writable.getWriter()
+  const encoder = new TextEncoder()
+  const reader = upstream.getReader()
+  const decoder = new TextDecoder()
+
+  const pump = async () => {
+    let buffer = ''
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data: ')) continue
+          const data = trimmed.slice(6)
+          if (!data || data === '[DONE]') continue
+          try {
+            const parsed = JSON.parse(data)
+            if (parsed.type === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
+              await writer.write(encoder.encode(`data: ${JSON.stringify({ t: parsed.delta.text })}\n\n`))
+            }
+          } catch { /* skip */ }
+        }
+      }
+      await writer.write(encoder.encode('data: [DONE]\n\n'))
+    } catch (e) {
+      console.error('Anthropic stream error:', e)
+    } finally {
+      await writer.close()
+    }
+  }
+  pump()
+  return readable
+}
+
+function transformOpenAIStream(upstream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>()
+  const writer = writable.getWriter()
+  const encoder = new TextEncoder()
+  const reader = upstream.getReader()
+  const decoder = new TextDecoder()
+
+  const pump = async () => {
+    let buffer = ''
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed.startsWith('data: ')) continue
+          const data = trimmed.slice(6)
+          if (!data || data === '[DONE]') continue
+          try {
+            const parsed = JSON.parse(data)
+            const delta = parsed.choices?.[0]?.delta?.content
+            if (delta) {
+              await writer.write(encoder.encode(`data: ${JSON.stringify({ t: delta })}\n\n`))
+            }
+          } catch { /* skip */ }
+        }
+      }
+      await writer.write(encoder.encode('data: [DONE]\n\n'))
+    } catch (e) {
+      console.error('OpenAI stream error:', e)
+    } finally {
+      await writer.close()
+    }
+  }
+  pump()
+  return readable
+}
+
+// --- CORS ---
+
 function buildCorsHeaders(origin: string | null, allowedOrigin: string): Record<string, string> {
   return {
     'Access-Control-Allow-Origin': allowedOrigin === '*' ? '*' : (origin || allowedOrigin),
@@ -95,42 +251,51 @@ function buildCorsHeaders(origin: string | null, allowedOrigin: string): Record<
   }
 }
 
+// --- Main handler ---
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const origin = request.headers.get('Origin')
     const allowed = env.ALLOWED_ORIGIN || '*'
     const cors = buildCorsHeaders(origin, allowed)
 
-    // CORS preflight
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: cors })
     }
 
     const url = new URL(request.url)
 
-    // Health check
+    // Health check — also reports active provider
     if (url.pathname === '/health') {
-      return new Response(JSON.stringify({ status: 'ok' }), {
-        headers: { ...cors, 'Content-Type': 'application/json' },
-      })
+      const provider = detectProvider(env)
+      const hasKey = !!getApiKey(env, provider)
+      return new Response(
+        JSON.stringify({ status: hasKey ? 'ok' : 'no_key', provider }),
+        { headers: { ...cors, 'Content-Type': 'application/json' } },
+      )
     }
 
-    // Only accept POST /api/chat
     if (url.pathname !== '/api/chat' || request.method !== 'POST') {
       return new Response('Not found', { status: 404, headers: cors })
     }
 
-    if (!env.ANTHROPIC_API_KEY) {
+    const provider = detectProvider(env)
+    const apiKey = getApiKey(env, provider)
+
+    if (!apiKey) {
       return new Response(
-        JSON.stringify({ error: 'API key not configured. Set ANTHROPIC_API_KEY as a Worker secret.' }),
+        JSON.stringify({
+          error: 'API key not configured',
+          hint: provider === 'anthropic'
+            ? 'Set ANTHROPIC_API_KEY as a Worker secret'
+            : 'Set DEEPSEEK_API_KEY as a Worker secret',
+        }),
         { status: 500, headers: { ...cors, 'Content-Type': 'application/json' } },
       )
     }
 
     try {
-      const body = (await request.json()) as {
-        messages: Array<{ role: string; content: string }>
-      }
+      const body = (await request.json()) as { messages: ChatMessage[] }
       const { messages } = body
 
       if (!Array.isArray(messages) || messages.length === 0) {
@@ -140,87 +305,28 @@ export default {
         )
       }
 
-      const model = env.MODEL || 'claude-sonnet-4-20250514'
+      const model = env.MODEL || getDefaultModel(provider)
 
-      const anthropicResponse = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': env.ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model,
-          max_tokens: 800,
-          system: SYSTEM_PROMPT,
-          messages: messages.map((m) => ({ role: m.role, content: m.content })),
-          stream: true,
-        }),
-      })
+      let llmResponse: Response
+      if (provider === 'anthropic') {
+        llmResponse = await callAnthropic(apiKey, model, messages)
+      } else {
+        llmResponse = await callDeepSeek(apiKey, model, messages)
+      }
 
-      if (!anthropicResponse.ok) {
-        const errorText = await anthropicResponse.text()
+      if (!llmResponse.ok) {
+        const errorText = await llmResponse.text()
         return new Response(
-          JSON.stringify({
-            error: `LLM API error (${anthropicResponse.status})`,
-            detail: errorText,
-          }),
+          JSON.stringify({ error: `LLM API error (${llmResponse.status})`, detail: errorText }),
           { status: 502, headers: { ...cors, 'Content-Type': 'application/json' } },
         )
       }
 
-      // Transform Anthropic SSE stream to simplified format
-      const { readable, writable } = new TransformStream()
-      const writer = writable.getWriter()
-      const encoder = new TextEncoder()
+      const transformed = provider === 'anthropic'
+        ? transformAnthropicStream(llmResponse.body!)
+        : transformOpenAIStream(llmResponse.body!)
 
-      const reader = anthropicResponse.body!.getReader()
-      const decoder = new TextDecoder()
-
-      const pump = async () => {
-        let buffer = ''
-        try {
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-
-            buffer += decoder.decode(value, { stream: true })
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || ''
-
-            for (const line of lines) {
-              const trimmed = line.trim()
-              if (!trimmed.startsWith('data: ')) continue
-              const data = trimmed.slice(6)
-              if (!data || data === '[DONE]') continue
-
-              try {
-                const parsed = JSON.parse(data)
-                if (
-                  parsed.type === 'content_block_delta' &&
-                  parsed.delta?.type === 'text_delta'
-                ) {
-                  await writer.write(
-                    encoder.encode(`data: ${JSON.stringify({ t: parsed.delta.text })}\n\n`),
-                  )
-                }
-              } catch {
-                /* skip malformed JSON */
-              }
-            }
-          }
-          await writer.write(encoder.encode('data: [DONE]\n\n'))
-        } catch (e) {
-          console.error('Stream processing error:', e)
-        } finally {
-          await writer.close()
-        }
-      }
-
-      // Start pumping without awaiting (runs in background)
-      pump()
-
-      return new Response(readable, {
+      return new Response(transformed, {
         headers: {
           ...cors,
           'Content-Type': 'text/event-stream',

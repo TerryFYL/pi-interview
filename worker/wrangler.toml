@@ -2,9 +2,14 @@ name = "pi-interview-api"
 main = "src/index.ts"
 compatibility_date = "2025-02-20"
 
-# API key is stored as a secret, set via:
-#   wrangler secret put ANTHROPIC_API_KEY
-# Optional env vars (set in [vars]):
+# Secrets (set via wrangler secret put):
+#   DEEPSEEK_API_KEY  — recommended, cheaper ($0.07/$0.27 per M tokens)
+#   ANTHROPIC_API_KEY — alternative, higher quality
+#
+# Auto-detection: if both keys exist, LLM_PROVIDER decides which to use.
+# If only one key exists, that provider is used automatically.
+
 [vars]
-MODEL = "claude-sonnet-4-20250514"
+# LLM_PROVIDER = "deepseek"  # or "anthropic" — auto-detected if not set
+# MODEL = "deepseek-chat"    # auto-set based on provider if not specified
 ALLOWED_ORIGIN = "*"
